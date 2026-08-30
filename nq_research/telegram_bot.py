@@ -61,6 +61,18 @@ class TG:
         self._call("sendMessage", chat_id=chat or self.chat, text=text[:4096], parse_mode="HTML",
                    disable_web_page_preview=True)
 
+    def send_photo(self, path, caption: str | None = None, chat: str | None = None):
+        with open(path, "rb") as fh:
+            r = requests.post(
+                f"{API}/bot{self.token}/sendPhoto",
+                data={"chat_id": chat or self.chat, "parse_mode": "HTML",
+                      "caption": (caption or "")[:1024]},
+                files={"photo": fh},
+                timeout=180,
+            )
+        r.raise_for_status()
+        return r.json()
+
     def poll(self) -> list[dict]:
         data = self._call("getUpdates", offset=self.offset, timeout=50, allowed_updates=["message"])
         updates = data.get("result", [])
@@ -261,10 +273,7 @@ def main():
                         tg.send(what_happened(db, parts[1], parts[2] if len(parts) > 2 else None, one_m_csv))
                     elif low.startswith("/analyze "):
                         tg.send(analyze_condition(db, txt[9:]))
-                    elif low.startswith("/analog") or low.startswith("/charts"):
-                        import subprocess
-                        venv_py = ROOT / ".venv" / "Scripts" / "python.exe"
-                        scripts = ROOT / "charts"
+                    elif low.startswith("/charts"):
                         tg.send(
                             "📊 <b>Interactive charts</b> (hover/zoom — open in browser):\n"
                             f"• <a href=\"http://{CHART_HOST}/sessions.html?years=3\">NDX sessions 3y</a> · "
@@ -272,8 +281,20 @@ def main():
                             f"• <a href=\"http://{CHART_HOST}/day.html?date=2026-08-28\">Friday 1-min</a> (change ?date=)\n"
                             f"• <a href=\"http://{CHART_HOST}/static/nq_analogs.html\">historical analogs</a> · "
                             f"<a href=\"http://{CHART_HOST}/static/nq_tech.html\">tech+GEX dashboard</a>\n"
-                            f"<i>Same Wi-Fi required from phone (LAN host {CHART_HOST}).</i>"
+                            f"Or send <code>/sessions years=10</code> to get a rendered PNG here.\n"
+                            f"<i>LAN host {CHART_HOST} — same Wi-Fi from phone.</i>"
                         )
+                    elif low.startswith("/sessions") or low.startswith("/analog"):
+                        # render the sessions chart as PNG and push it into the chat
+                        m_y = re.search(r"years?=(\d+)", low)
+                        y = int(m_y.group(1)) if m_y else 3
+                        from nq_research.chart_server import _sessions_fig
+                        out = ROOT / "charts" / f"_tg_sessions_{y}y.png"
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        tg.send(f"⏳ rendering NDX sessions {y}y…")
+                        _sessions_fig(y).write_image(out, width=1250, height=820, scale=1.3)
+                        tg.send_photo(out, caption=f"NDX sessions {y}y — static preview\n"
+                                      f"Interactive (hover/zoom): http://{CHART_HOST}/sessions.html?years={y}")
                     else:
                         # free text: try to find a date
                         m = re.search(r"(\d{4})-(\d{2})-(\d{2})", txt)
