@@ -17,37 +17,35 @@ from datetime import timedelta
 import pandas as pd
 
 SOCRATA_URL = (
-    "https://publicreporting.cftc.gov/resource/6dca-aqww.json"  # TFF futures+options, weekly
+    "https://publicreporting.cftc.gov/resource/gpe5-46if.json"  # TFF futures+options combined, weekly
 )
-
-# dealer-intermediary, asset manager/institutional, leveraged funds
-TFF_CODE_NASDAQ = "125741"   # COMMODITY EXCHANGE INC = not ours; NQ trades under CME code 092
-CME_CODE = "092"
+CME_CODE = "20974+"     # NASDAQ-100 futures+options combined (CME), TFF concluded-market code
 
 
 def fetch_cot_tff(cme_code: str = CME_CODE) -> pd.DataFrame:
-    """Live Socrata pull for one report_code -> (tuesday, lev_net, am_net, dealer_net)."""
+    """Live Socrata pull -> (tuesday, lev_net, am_net, dealer_net), from June 2010."""
     import requests
 
     params = {
         "$select": (
-            "report_date_as_yyyy_mm_dd,contract_units,"
-            "leveraged_funds_net_position,managed_money_net_position,"
-            "dealer_intermediary_net_position"
+            "report_date_as_yyyy_mm_dd,"
+            "lev_money_positions_long,lev_money_positions_short,"
+            "asset_mgr_positions_long,asset_mgr_positions_short,"
+            "dealer_positions_long_all,dealer_positions_short_all"
         ),
-        "$where": f"contract_units='{cme_code}' AND report_date_as_yyyy_mm_dd >= '1990-01-01'",
+        "$where": f"cftc_contract_market_code='{cme_code}'",
         "$order": "report_date_as_yyyy_mm_dd",
-        "$limit": 20000,
+        "$limit": 50000,
     }
-    r = requests.get(SOCRATA_URL, params=params, timeout=60)
+    r = requests.get(SOCRATA_URL, params=params, timeout=120)
     r.raise_for_status()
     rows = r.json()
     df = pd.DataFrame([
         (
             row["report_date_as_yyyy_mm_dd"],
-            float(row["leveraged_funds_net_position"]),
-            float(row["managed_money_net_position"]),
-            float(row["dealer_intermediary_net_position"]),
+            float(row["lev_money_positions_long"]) - float(row["lev_money_positions_short"]),
+            float(row["asset_mgr_positions_long"]) - float(row["asset_mgr_positions_short"]),
+            float(row["dealer_positions_long_all"]) - float(row["dealer_positions_short_all"]),
         )
         for row in rows
     ], columns=["tuesday", "lev_net", "am_net", "dealer_net"])
@@ -79,7 +77,8 @@ def join_cot_to_sessions(sessions: pd.DataFrame, reports: pd.DataFrame) -> pd.Da
     rep = add_release_dates(reports)[["release", "lev_net", "am_net", "dealer_net"]]
     rep = rep.sort_values("release").rename(columns={"release": "date"})
     s = sessions.copy()
-    s["date"] = pd.to_datetime(s["date"])
+    s["date"] = pd.DatetimeIndex(pd.to_datetime(s["date"])).as_unit("s")
+    rep["date"] = pd.DatetimeIndex(pd.to_datetime(rep["date"])).as_unit("s")
     out = pd.merge_asof(s.sort_values("date"), rep.sort_values("date"),
                         on="date", direction="backward", allow_exact_matches=True)
     return out

@@ -80,13 +80,12 @@ def _calendar_proximity(s: pd.DataFrame) -> pd.DataFrame:
     out["days_to_opex"] = [_nearest_above(opex, x) for x in d]
     out["days_since_opex"] = [_nearest_below(opex, x) for x in d]
     out["is_opex"] = out["days_to_opex"] == 0
-    out["is_opex_week"] = [
-        any(0 <= v <= 4 for v in (out["days_to_opex"].iloc[i], out["days_since_opex"].iloc[i]))
-        for i in range(len(out))
-    ]
+    # OPEX week = calendar week containing OPEX (Mon is 4 days before OPEX Friday)
+    out["is_opex_week"] = out["days_to_opex"] <= 4
+    # post-OPEX week = the trading week AFTER OPEX Friday: Mon(3d since) .. Fri(7d since); 9 for edge/holidays
     to_op = out["days_to_opex"].values
     si_op = out["days_since_opex"].values
-    out["is_post_opex_week"] = [bool(0 < b <= 5 and a > 4) for a, b in zip(to_op, si_op)]
+    out["is_post_opex_week"] = [bool(0 < b <= 9 and a > 9) for a, b in zip(to_op, si_op)]
     to_w = [_nearest_above(witch, x) for x in d]
     si_w = [_nearest_below(witch, x) for x in d]
     out["is_triple_witching"] = [a == 0 or b == 0 for a, b in zip(to_w, si_w)]
