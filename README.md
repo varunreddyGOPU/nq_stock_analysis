@@ -1,58 +1,91 @@
-# nq-research
+# nq_stock_analysis
 
-Conditional base-rate research engine for Nasdaq-100 daily behavior. Answers
-questions like *"When Friday closes down 0.50–0.75%, what happened the following
-Monday — and does it differ in the week after OPEX?"* with distributions, sample
-sizes, and confidence intervals. **Not a predictor; never emits a directional call.**
+**NQ/Nasdaq-100 conditional base-rate research engine** — answers questions like
+*"When Friday closes down 0.50–0.75%, what happened the following Monday — and does it
+differ in the week after OPEX?"* with **distributions, sample sizes, and confidence
+intervals**. Not a predictor; never emits a directional call.
+
+Also ships a **Telegram bot (`@nqstocks_bot`)** for interactive Q&A and chart delivery.
+
+## Example (real output, 1990–2026, ^NDX, n=9,232 sessions)
+
+```text
+Q: Friday close -0.50%..-0.75% — what happened the following Monday?
+
+n=113 — bootstrapped 95% CI: [39.8%, 58.4%]
+conditional rate 48.7% vs base 54.7% (lift -6.0%)
+mean -0.16% | median -0.09% | p10 -2.3% | p90 +1.7% | p=0.20
+→ no reliable edge; regime decay visible across decades
+
+Same, post-OPEX week only:
+n=27 — INSUFFICIENT SAMPLE, treat as anecdote (need ≥30)
+→ suggestive (-17.6% lift), unproven. The engine refuses to call it.
+```
+
+## Architecture
+
+```
+ingest/            prices (yfinance + Cboe VOL CSVs) · FRED/ALFRED vintages ·
+                   event calendar (OPEX/witching/elections) · FOMC dates ·
+                   CFTC COT (TFF, release-date join)
+features/          sessions-table assembly · three-candle pattern classifier
+query/             ConditionalQuery + seeded bootstrap CIs + Benjamini–Hochberg
+telegram_bot.py    @nqstocks_bot: /what /analyze /sessions /charts + LAN chart server
+cli.py             ingest → build → query-example
+tests/             50 tests — look-ahead tripwires ARE the test suite
+```
+
+35-column `sessions` table in DuckDB: price action, event proximity (OPEX/FOMC/CPI/NFP/
+elections), VIX regime + term structure, candle patterns, COT positioning percentiles.
+
+## Guarantees (all test-enforced)
+
+- **No look-ahead** — COT joins on *release* date (Tue snapshot ≠ usable till Fri 3:30pm ET);
+  macro uses point-in-time ALFRED vintages, never revised values
+- **No probability without n** — every stat carries sample size + bootstrapped CI;
+  `n < 30` → `INSUFFICIENT SAMPLE, treat as anecdote` in the headline
+- **Continuity tripwire** — any |daily move| > 25% is flagged (data errors, roll gaps)
+- **Reproducible** — seeded bootstrap, deterministic builds
+- **Multiple-testing honesty** — session trial counter + BH-adjusted p-values
 
 ## Quick start
 
 ```bash
-uv sync --extra test          # or: pip install -e ".[test]"
-make ingest                   # downloads price/vol/COT caches to data/raw/ (parquet)
-make build                    # assembles the sessions table -> data/nq_research.duckdb
-make query                    # runs the example question + multiple-testing report
-make test                     # 50 tests, incl. the no-look-ahead suite
+uv sync --extra test     # or: pip install -e ".[test]"
+make ingest              # pulls ^NDX/QQQ/^GSPC/NQ=F/^VIX/^VIX3M/^VVIX + COT → data/raw (parquet)
+make build               # assembles sessions table → data/nq_research.duckdb
+make query               # runs the example question, honest report
+make test                # full suite
+
+# optional point-in-time macro
+export FRED_API_KEY=...  # free from fred.gov
+make ingest
 ```
 
-Optional: export `FRED_API_KEY` (free) before `make ingest` to add point-in-time
-macro columns (CPI YoY as-reported via ALFRED vintages, Fed funds, curve).
+## Telegram bot
 
-## The example question, answered (1990–2026, ^NDX)
-
-```
-Friday close -0.50%..-0.75%  ->  next Monday:    n=113, up-rate 48.7% vs base 54.7%
-    95% CI [39.8%, 58.4%] · mean -0.16% · p=0.20  →  no reliable edge
-Same, post-OPEX week only:       n=27 — INSUFFICIENT SAMPLE, treat as anecdote
-    up-rate 37.0% · mean -0.51% · p=0.066        →  suggestive, unproven
+```bash
+cp .env.example .env      # NQ_BOT_TOKEN from @BotFather, NQ_CHAT_ID=your id
+bash run_bot_forever.sh   # long-poll + LAN interactive-chart server :8791
 ```
 
-## What's inside
-
-| Module | Role |
+| Command | What you get |
 |---|---|
-| `ingest/prices.py` | yfinance daily bars (9,232 ^NDX sessions) + Cboe VOL CSVs (VIX3M via official source) |
-| `ingest/macro.py` | FRED levels + ALFRED **vintage** series; `cpi_yoy_as_reported()` is point-in-time |
-| `ingest/calendar.py` | OPEX / triple witching / elections / quarter-end — pure computation |
-| `ingest/fomc.py` | FOMC dates: checked-in CSV (1990–2026) + fed.gov scrape fallback |
-| `ingest/cot.py` | CFTC TFF (NQ combined `20974+`, 846 weekly reports); **release-date join** — Tuesday snapshot visible only from Friday 3:30pm ET |
-| `features/patterns.py` | `three_candle_pattern` vocabulary, explicit rules, no TA black box |
-| `features/build.py` | 35-column sessions table: event proximity, VIX regime, price action, COT percentiles |
-| `query/stats.py` | seeded bootstrap CIs + Benjamini-Hochberg correction |
-| `query/conditional.py` | `ConditionalQuery.conditional()` / `.report()` / `.multiple_testing_report()` / `.compare_subperiods()`; targets incl. **triple-barrier** (López de Prado) |
-
-## Guarantees (all test-enforced)
-
-- **No look-ahead**: COT joined on release date (test), macro vintages as-of session date (test)
-- **No probability without n**: every result carries `n` + bootstrapped CI; `n<30` → `INSUFFICIENT SAMPLE` headline
-- **Continuity**: any |daily| return > 25% is flagged (roll-gap/data-error tripwire)
-- **Reproducibility**: bootstrap is seeded; identical filters → identical results
-- **Multiple testing**: session trial counter with BH-adjusted p-values in every report
+| `/what 2026-08-28` | full session card (VIX regime, pattern, events, forward 1/5/10/20d) |
+| `/what 2026-08-28 13:45` | + minute-level hi/lo (recent sessions) |
+| `/analyze friday retpct:-0.75..-0.5 post-opex` | conditional base-rate, n + CI first |
+| `/sessions years=10` | rendered chart PNG pushed into chat |
+| `/charts` | links to live hover/zoom plotly charts (LAN) |
+| `/syntax` | filter vocabulary |
 
 ## Honest limitations
 
-- `NQ=F` is stored but never used for returns (unadjusted front-month roll)
-- FOMC dates from checked-in CSV through 2026 (editable: `data/fomc_dates.csv`)
-- CPI/NFP event *proximity* uses day-10/day-5 calendar proxies, not the exact BLS calendar
-- TFF positioning exists only from June 2010; earlier sessions have NaN percentiles
-- Macro columns stay NaN unless `FRED_API_KEY` is set before ingest
+- `NQ=F` stored but never used for returns (unadjusted front-month roll)
+- FOMC dates from a checked-in CSV (1990–2026); fed.gov scrape is fallback only
+- CPI/NFP event proximity uses day-10/day-5 calendar proxies
+- TFF positioning exists only from June 2010
+- Macro columns stay NaN without `FRED_API_KEY`
+
+## Status
+
+Phase 1 complete: engine + tests + bot. Phase 2 (natural-language query layer) not started.
