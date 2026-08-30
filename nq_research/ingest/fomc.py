@@ -27,8 +27,17 @@ _MEETING_RE = re.compile(r"(January|February|March|April|May|June|July|August|Se
 
 
 def fomc_meeting_dates(use_csv_fallback: bool = True) -> list[date]:
-    """Historical + scheduled FOMC meeting start dates (8 per year, ~2 days each)."""
+    """Historical + scheduled FOMC meeting start dates (8 per year, ~2 days each).
+
+    CSV (checked in, deterministic) is the primary source when present; the
+    federalreserve.gov scrape only augments/backs it up when the CSV is absent.
+    """
     got: set[date] = set()
+    if use_csv_fallback:
+        csv_dates = _from_csv()
+        if csv_dates:
+            got.update(csv_dates)
+            return sorted(got)
     try:
         headers = {"User-Agent": "Mozilla/5.0 (research; contact: local)"}
         for url in (FED_HIST_URL, FED_CAL_URL):
@@ -44,9 +53,7 @@ def fomc_meeting_dates(use_csv_fallback: bool = True) -> list[date]:
         got = {d for d in got if 1990 <= d.year <= 2027}
     except requests.RequestException:
         pass
-    if got or not use_csv_fallback:
-        return sorted(got)
-    return _from_csv()
+    return sorted(got)
 
 
 def _from_csv() -> list[date]:
