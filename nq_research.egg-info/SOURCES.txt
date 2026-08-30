@@ -1,0 +1,6 @@
+pyproject.toml
+nq_research.egg-info/PKG-INFO
+nq_research.egg-info/SOURCES.txt
+nq_research.egg-info/dependency_links.txt
+nq_research.egg-info/requires.txt
+nq_research.egg-info/top_level.txt

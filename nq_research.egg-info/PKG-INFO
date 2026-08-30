@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: nq-research
+Version: 0.1.0
+Summary: Conditional base-rate research engine for Nasdaq-100 daily behavior. Honest statistics: n, CI, lift - never a directional call.
+Requires-Python: >=3.11
+Requires-Dist: pandas>=2.0
+Requires-Dist: numpy>=1.26
+Requires-Dist: duckdb>=0.10
+Requires-Dist: pyarrow>=15
+Requires-Dist: yfinance>=0.2.40
+Requires-Dist: requests>=2.31
+Provides-Extra: test
+Requires-Dist: pytest>=8.0; extra == "test"

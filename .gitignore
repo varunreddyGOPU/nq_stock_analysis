@@ -1,0 +1,14 @@
+# raw data caches & database
+data/raw/
+data/*.duckdb
+data/*.duckdb.wal
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+uv.lock
+
+# env
+.env

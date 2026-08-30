@@ -1,0 +1,26 @@
+[project]
+name = "nq-research"
+version = "0.1.0"
+description = "Conditional base-rate research engine for Nasdaq-100 daily behavior. Honest statistics: n, CI, lift - never a directional call."
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "duckdb>=0.10",
+    "pyarrow>=15",
+    "yfinance>=0.2.40",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["nq_research*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
