@@ -99,9 +99,9 @@ def fmt_pct(x) -> str:
     return f"{x * 100:+.2f}%" if x == x else "n/a"
 
 
-def what_happened(db: Path, day: str, hm: str | None, one_m_csv: Path) -> str:
+def what_happened(db: Path, day: str, hm: str | None, one_m_csv: Path, deep: bool = False) -> str:
     """Session dive for a date; optional minute-level color from the 1-min cache."""
-    from nq_research.query.conditional import ConditionalQuery
+    from nq_research.query.conditional import ConditionalQuery, _target_values
 
     q = ConditionalQuery(db=str(db))
     table = q._load()
@@ -116,13 +116,29 @@ def what_happened(db: Path, day: str, hm: str | None, one_m_csv: Path) -> str:
         f"Pattern: <b>{r['three_candle_pattern']}</b> · down-streak {int(r['consecutive_down_days'])}d",
         f"OPEX in {int(r['days_to_opex'])}d / since {int(r['days_since_opex'])}d · FOMC in {int(r['days_to_fomc'])}d",
     ]
-    # forward returns
-    i = row.index[0]
-    for h in (1, 5, 10, 20):
-        j = i + h
-        if j < len(table):
-            fr = table.close.iloc[j] / r["close"] - 1
-            lines.append(f"next {h:2d}d: {fmt_pct(fr)}")
+    # base-rate context for this day's shape (rule-based, engine-computed)
+    base_block = ""
+    try:
+        i = row.index[0]
+        fwd = {}
+        for h in (1, 5, 10, 20):
+            j = i + h
+            if j < len(table):
+                fr = table.close.iloc[j] / r["close"] - 1
+                lines.append(f"next {h:2d}d: {fmt_pct(fr)}")
+                fwd[h] = round(float(fr), 4)
+        streak = int(r["consecutive_down_days"])
+        if streak >= 3:
+            rq = q.conditional(filters={"three_candle_pattern": r["three_candle_pattern"],
+                                        "consecutive_down_days": streak},
+                               target="next_session_return", horizon=1)
+            lines.append(f"⚡ days like this (next 1d up-rate): {rq.conditional_rate:.1%} "
+                         f"vs base {rq.base_rate:.1%} (n={rq.n}, CI {rq.ci_95[0]:.0%}-{rq.ci_95[1]:.0%})")
+            base_block = (f"Pattern {r['three_candle_pattern']} with {streak}d down-streak: "
+                          f"n={rq.n}, next-1d up-rate {rq.conditional_rate:.1%} vs base "
+                          f"{rq.base_rate:.1%}, CI {rq.ci_95[0]:.0%}-{rq.ci_95[1]:.0%}, p={rq.p_value:.2f}")
+    except Exception as e:
+        lines.append(f"⚠️ base-rate context failed: {type(e).__name__}")
     lines.append(f"\n<i>next-session context, n=1 — this is history, not a signal</i>")
 
     # minute color if requested and CSV covers it
@@ -140,6 +156,25 @@ def what_happened(db: Path, day: str, hm: str | None, one_m_csv: Path) -> str:
             lines.append(
                 f"\n⏱ <b>{hm} ET ±1h:</b> hi {sub.Close.max():,.2f} @ {sub.loc[sub.Close.idxmax(), 'dt']:%H:%M} · "
                 f"lo {sub.Close.min():,.2f} @ {sub.loc[sub.Close.idxmin(), 'dt']:%H:%M}")
+    if deep:
+        from nq_research.llm_breakdown import explain_session, is_available
+        if is_available():
+            try:
+                session_row = {k: (float(r[k]) if pd.api.types.is_number(r[k]) else str(r[k]))
+                               for k in ("date", "dow", "close", "ret", "gap", "vix", "vix_bucket",
+                                         "is_backwardation", "three_candle_pattern",
+                                         "consecutive_down_days", "days_to_opex",
+                                         "days_since_opex", "days_to_fomc")}
+                narrative = explain_session(
+                    session_row,
+                    {f"next_{h}d": float(table.close.iloc[i + h] / r["close"] - 1)
+                     for h in (1, 5) if i + h < len(table)},
+                    base_block or "no matching base-rate cohort (low streak)",
+                )
+                return "\n".join(lines) + "\n\n🧠 <b>Deep dive (LLM narration):</b>\n" + narrative
+            except Exception as e:
+                return "\n".join(lines) + f"\n\n⚠️ LLM deep dive unavailable: {type(e).__name__}"
+        return "\n".join(lines) + "\n\n⚠️ Ollama not running — start it for /deep breakdowns"
     return "\n".join(lines)
 
 
@@ -229,9 +264,10 @@ def analyze_condition(db: Path, text: str) -> str:
 HELP = """<b>NQ analyzer</b> — conditional history, never predictions.
 
 <b>/what 2026-03-20</b> — everything known about that session
-<b>/what 2026-03-20 13:45</b> — adds minute-level hi/lo (last 7 sessions)
+<b>/deep 2026-03-20</b> — same + LLM plain-English breakdown 🧠
+<b>/deep 2026-03-20 13:45</b> — adds minute-level hi/lo (recent sessions)
 <b>/analyze friday retpct:-0.75..-0.5 post-opex</b> — base-rate query
-<b>/charts</b> — interactive hover/zoom chart links
+<b>/sessions years=10</b> — chart PNG pushed here · <b>/charts</b> — interactive links
 <b>/syntax</b> — filter vocabulary
 
 Every stat carries n + 95% CI. n&lt;30 = anecdote, and I'll say so."""
@@ -263,6 +299,10 @@ def main():
                 try:
                     if low.startswith("/start") or low.startswith("/help"):
                         tg.send(HELP)
+                    elif low.startswith("/deep "):
+                        parts = txt.split()
+                        tg.send(what_happened(db, parts[1], parts[2] if len(parts) > 2 else None,
+                                              one_m_csv, deep=True))
                     elif low.startswith("/syntax"):
                         tg.send("<b>filters:</b> friday..thursday · retpct:-0.75..-0.5 (percent) or "
                                 "ret:-0.0075..-0.005 (fraction) · post-opex · opex-week · witching · "
